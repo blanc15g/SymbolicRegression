@@ -23,6 +23,9 @@ class Node():
     '''A parent class used to represent all the nodes in the function tree
     It's not actually needed, but just a reference to what functions should always be available'''
 
+    COMPLEXITY = 0  #a measure of node complexity, aim to minimize this with good fit
+                    #these are arbitrary, based on what makes the "most sense"
+
     def __init__(self, parent):
         '''
         :param parent:  Parent node of this node
@@ -78,6 +81,32 @@ class Node():
         raise Exception("evaluate not defined for {0}".format(type(self)))
         return 0
 
+    def functionComplexity(self):
+        '''
+        Returns a measure of the complexity for the function starting at this node
+        '''
+        if hasattr(self, 'children'):
+            childComplexities = 0
+            for child in self.children:
+                childComplexities += child.functionComplexity()
+            return self.COMPLEXITY * (len(self.children) - 1) + childComplexities
+
+        if hasattr(self, 'child'):
+            return self.COMPLEXITY + self.child.functionComplexity()
+
+        return self.COMPLEXITY
+
+    def __lt__(self, other):
+        '''
+        makes nodes sortable based on complexity
+        '''
+        return self.functionComplexity() < other.functionComplexity()
+
+    def numCoef(self):
+        return self.preprocess(0)
+
+
+
 
 
 
@@ -88,6 +117,9 @@ class Coef(Node):
     '''
     Class representing a coefficient node in a function tree
     '''
+
+    COMPLEXITY = 1
+    #low because coefficients are already penalized in adjusted R^2 calculation
 
     def __init__(self, parent):
         '''
@@ -160,6 +192,10 @@ nodeTypes.append(Coef)
 
 
 class Var(Node):
+
+    COMPLEXITY = 3
+    #Adding the variable is about middle of the road complexity
+
     def __init__(self, parent):
         '''
         :param parent:  Parent node of this node
@@ -226,6 +262,8 @@ class Add(Node):
     '''
     Class representing a node that adds its children together
     '''
+
+    COMPLEXITY = 1  #addition is pretty simple
 
     def __init__(self, parent):
         '''
@@ -315,10 +353,14 @@ class Add(Node):
 nodeTypes.append(Add)
 
 
-class Mult():
+class Mult(Node):
     '''
     Node representing multiplication
     '''
+
+    COMPLEXITY  = 2
+
+
     def __init__(self, parent):
         '''
         :param parent:  Parent node of this node
@@ -412,10 +454,12 @@ class Mult():
 nodeTypes.append(Mult)
 
 
-class Power():
+class Power(Node):
     '''
     Node representing the exponentation of its children
     '''
+
+    COMPLEXITY = 5
 
     def __init__(self, parent):
         '''
@@ -517,6 +561,8 @@ nodeTypes.append(Power)
 class Invert(Node):
     '''A node that evaluates to the recipricol of it's child node'''
 
+    COMPLEXITY = 2
+
     def __init__(self, parent):
         '''
         :param parent:  Parent node of this node
@@ -593,6 +639,8 @@ class Log(Node):
     '''
     Node that returns the natural log of its child
     '''
+
+    COMPLEXITY = 5
 
     def __init__(self, parent):
         '''
@@ -841,7 +889,7 @@ def findUniqueFunctionsStringVersion(depth, xData, yData, output = False):
     if output:
         outputFile = open('models.txt', 'w')
     '''
-    Same as above but uses string method of evaluation
+    Same as above but uses string method of evaluation and returns strings. Generally a bit faster
 
     :param depth: Depth to search for
 
@@ -900,6 +948,80 @@ def findUniqueFunctionsStringVersion(depth, xData, yData, output = False):
         outputFile.close()
     return models
 
+
+DELIMTER = '\t\t'#:-:\t\t'
+def modelsWithComplexity(depth, xData, yData, output = False):
+    #if output:
+    #    outputFile = open('modelsTable.txt', 'w')
+    '''
+    Same as above but gives 3 pieces of information for each model:
+        1) complexity
+        2) num coefficients
+        3) model itself
+
+    :param depth: Depth to search for
+
+    :param xData: List of np arrays containing various x distributions
+    :param yData: List of np arrays containing the corresponding y distributions
+
+    :return: List of strings representing each unique function
+    '''
+
+    models = []
+    serializedUsed = set()  # we will attempt to serialize functions into this set
+                            #based on their fitted data
+                            #to prevent using the same function twice
+
+    currentGen = [Var(None), Coef(None)]
+    for model in currentGen:
+        models.append((model.functionComplexity(), model.numCoef(), nodeToFunctionString(model)))
+        #if output:
+        #    outputFile.write(nodeToFunctionString(model) + '\n')
+
+    numOverlap = 0        #these two variables aren't needed, but good as status checks
+    numFailed = 0
+
+
+    for i in range(depth):
+        nextCurrentGen = []     #stores the next generation
+        for model in nextGen(currentGen):
+            serialized = ()
+            functionString = nodeToFunctionString(model)
+            numCoef = model.preprocess(0)
+            function = eval(functionString)
+            for dataSet in range(len(xData)):   #assumes xData and yData have same length
+                try:
+                    serialized += serializedBasedOnDataString(function, xData[dataSet], yData[dataSet], numCoef)
+                except:
+                    pass
+
+            if serialized == ():    #failed to fit any of the data
+                numFailed += 1
+
+            else:
+                if serialized in serializedUsed:
+                    numOverlap += 1
+                else:
+                    nextCurrentGen.append(model)
+                    models.append((model.functionComplexity(), model.numCoef(), functionString))
+                    serializedUsed.add(serialized)
+
+                    #if output:
+                    #    outputFile.write(functionString + '\n')
+
+        currentGen = nextCurrentGen
+        print(i, len(currentGen), numOverlap, numFailed)  #status check
+
+    models.sort()
+    if output:
+        with open('modelsTable.txt', 'w') as outputFile:
+            for model in models:
+                outputFile.write(DELIMTER.join(list(map(str,model))) + '\n')
+
+
+    return models
+
+
 #Sample data from another research project
 x1 = np.array([ 1.025,  1.075,  1.125,  1.175,  1.225,  1.275,  1.325,  1.375,
        1.425,  1.475,  1.525,  1.575,  1.625,  1.675,  1.725,  1.775,
@@ -924,7 +1046,7 @@ y2 = np.array(y2)
 #Logistic sample data with noise
 x3 = np.array(list(range(1,20)))
 y3 = []
-for xVal in x2:
+for xVal in x3:
     y3.append(5/(1+2**(4*xVal + 3) + random.random()))
 y3 = np.array(y3)
 
